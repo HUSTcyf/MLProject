@@ -43,7 +43,7 @@ if __name__ == '__main__':
     trainer = Trainer(config)
     trainer.cuda()
 
-    imgs_test, _ = iter(test_dataloader).next()
+    imgs_test, _ = next(iter(test_dataloader))
     iterations = trainer.resume(checkpoint_directory) if args.resume else 0
     while True:
         with torch.autograd.set_detect_anomaly(True):
