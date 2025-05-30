@@ -1,4 +1,4 @@
-### MLProject
+### MLProject (DCTGAN)
 -------------
 ### Platform
 ```
@@ -46,8 +46,31 @@ Then install the rest requirements by:
 `pip install -r requirements.txt`
 
 ### Prepare the dataset
-`mkdir datasets`
+`mkdir datasets` & `cd datasets`
+
+Download the Mstar dataset from the link [MStar](https://pan.baidu.com/s/183OZYvfwezPtAvHx9TItyA?pwd=3ds4) code: 3ds4. Then unzip the file to `./datasets/Mstar`. 
+
+Run `python prepare_mstar.py -i ./datasets/Mstar -o ./datasets/tmp` to extract the images to `./datasets/Mstar.npy`
 
 ### Train
+Run `bash scripts/train.sh` or 
+```sh
+python train.py \
+--conf configs/mstar_dctgan.yaml \
+--output_dir results/mstar_dctgan \
+--gpu 0
+```
+The results will be saved at `./datasets/mstar_dctgan`.
 
-### Test
+### Test & Metrics
+Run `bash scripts/test.sh` or 
+```sh
+python test.py \
+--dir Mstar \
+--conf configs/mstar_dctgan.yaml \
+--name results/mstar_dctgan \
+--gpu 0
+```
+
+### Generate SAR detection dataset
+Run `python gen_detect.py -o results/`, and the result will be saved at `./results/multi`.

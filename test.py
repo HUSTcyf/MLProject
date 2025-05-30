@@ -166,6 +166,7 @@ if __name__ == '__main__':
             output.save(os.path.join(fake_dir, str(cls), '{}.png'.format(str(i).zfill(len(str(gen_num))))), 'png')
     
     for cls in range(data_for_gen.shape[0]):
+        print(f"Metrics class: {cls}")
         fid(os.path.join(real_dir, str(cls)), os.path.join(fake_dir, str(cls)))
         ssim(os.path.join(real_dir, str(cls)), os.path.join(fake_dir, str(cls)))
         LPIPS(os.path.join(real_dir, str(cls)), os.path.join(fake_dir, str(cls)))

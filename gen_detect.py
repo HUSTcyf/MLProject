@@ -5,6 +5,7 @@ import shutil
 import random
 import numpy as np
 import matplotlib.pyplot as plt
+from argparse import ArgumentParser
 from sklearn.decomposition import PCA
 from sklearn.cluster import DBSCAN, KMeans
 from skimage.feature import local_binary_pattern
@@ -277,12 +278,16 @@ def main():
     class_index_list6 = [3, 1, 8, 9, 0, 7]
     img_path4 = "results/fake/4/"
     img_path6 = "results/fake/6/"
-    out_path = "results/"
+    
     # left_pad, right_pad = 100, 160
     # top_pad, bottom_pad = 100, 160
     # img_with_border = cv2.copyMakeBorder(img, top_pad, bottom_pad, left_pad, right_pad, cv2.BORDER_REFLECT)
     # cv2.imshow('Image with Border', img_with_border)
 
+    parser = ArgumentParser()
+    parser.add_argument("--out", '-o', type=str, default="results/")
+    args = parser.parse_args()
+    out_path = args.out
     models = {
         "KMeans": KMeans(n_clusters=11, max_iter=1000),
         "DBSCAN": DBSCAN(eps=3e-3, min_samples=10),
