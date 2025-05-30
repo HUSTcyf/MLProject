@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-python train.py --conf configs/flower_lofgan.yaml \
---output_dir results/flower_lofgan \
---gpu 0
+python train.py --conf configs/mstar_dctgan.yaml \
+--output_dir results/mstar_dctgan \
+--gpu 1

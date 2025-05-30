@@ -314,22 +314,22 @@ class Generator(nn.Module):
         c3, s3 = skips['conv3_1'], skips['skip3']
         c4, s4 = skips['conv4_1'], skips['skip4']
         
-        cg = make_grid(torch.mean(c1, dim=1), normalize=True)
-        save_image(cg, "conv1.png")
-        sg = make_grid(torch.mean(s1, dim=1), normalize=True)
-        save_image(sg, "skip1.png")
-        cg = make_grid(torch.mean(c2, dim=1), normalize=True)
-        save_image(cg, "conv2.png")
-        sg = make_grid(torch.mean(s2, dim=1), normalize=True)
-        save_image(sg, "skip2.png")
-        cg = make_grid(torch.mean(c3, dim=1), normalize=True)
-        save_image(cg, "conv3.png")
-        sg = make_grid(torch.mean(s3, dim=1), normalize=True)
-        save_image(sg, "skip3.png")
-        cg = make_grid(torch.mean(c4, dim=1), normalize=True)
-        save_image(cg, "conv4.png")
-        sg = make_grid(torch.mean(s4, dim=1), normalize=True)
-        save_image(sg, "skip4.png")
+        # cg = make_grid(torch.mean(c1, dim=1), normalize=True)
+        # save_image(cg, "conv1.png")
+        # sg = make_grid(torch.mean(s1, dim=1), normalize=True)
+        # save_image(sg, "skip1.png")
+        # cg = make_grid(torch.mean(c2, dim=1), normalize=True)
+        # save_image(cg, "conv2.png")
+        # sg = make_grid(torch.mean(s2, dim=1), normalize=True)
+        # save_image(sg, "skip2.png")
+        # cg = make_grid(torch.mean(c3, dim=1), normalize=True)
+        # save_image(cg, "conv3.png")
+        # sg = make_grid(torch.mean(s3, dim=1), normalize=True)
+        # save_image(sg, "skip3.png")
+        # cg = make_grid(torch.mean(c4, dim=1), normalize=True)
+        # save_image(cg, "conv4.png")
+        # sg = make_grid(torch.mean(s4, dim=1), normalize=True)
+        # save_image(sg, "skip4.png")
 
         similarity_total = torch.cat([torch.rand(b, 1) for _ in range(k)], dim=1).cuda()  # b*k
         similarity_sum = torch.sum(similarity_total, dim=1, keepdim=True).expand(b, k)  # b*k

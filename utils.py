@@ -62,7 +62,7 @@ def get_config(config):
 def get_loader(dataset, root, mode, n_sample, num_for_seen, batch_size, num_workers, shuffle, drop_last,
                new_size=None, height=28, width=28, crop=False, center_crop=False):
 
-    assert dataset in ['flower', 'vggface', 'animal']
+    assert dataset in ['flower', 'vggface', 'animal', 'mstar']
 
     transform_list = [transforms.ToTensor(),
                       transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
