@@ -12,8 +12,8 @@ from trainer import Trainer
 from utils import make_result_folders, write_image, write_loss, get_config, get_loaders
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--conf', type=str,default="./configs/flower_lofgan.yaml")
-parser.add_argument('--output_dir', type=str,default="./results/flower_wavegan_base_index")
+parser.add_argument('--conf', type=str, required=True) # "./configs/flower_lofgan.yaml"
+parser.add_argument('--output_dir', type=str, required=True) # "./results/flower_wavegan_base_index"
 parser.add_argument('-r', "--resume", action="store_true")
 parser.add_argument('--gpu', type=str, default='0')
 args = parser.parse_args()

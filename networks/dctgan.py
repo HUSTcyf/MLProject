@@ -1,71 +1,19 @@
 import random
+import math
 import cv2
 import lpips
+import numpy as np
+import torch_dct as dct
 from PIL import Image
 from tqdm import tqdm
-import numpy as np
 from torch import autograd
 from torch import nn
+from torchvision.utils import save_image, make_grid
 from networks.blocks import *
 from networks.loss import *
 from utils import batched_index_select, batched_scatter
-from torchvision import transforms
-import os
-import scipy.misc
-from utils import  unloader
+from utils import unloader
 
-def get_wav(in_channels, pool=True):
-    """wavelet decomposition using conv2d"""
-    harr_wav_L = 1 / np.sqrt(2) * np.ones((1, 2))
-    harr_wav_H = 1 / np.sqrt(2) * np.ones((1, 2))
-    harr_wav_H[0, 0] = -1 * harr_wav_H[0, 0]
-
-    harr_wav_LL = np.transpose(harr_wav_L) * harr_wav_L
-    harr_wav_LH = np.transpose(harr_wav_L) * harr_wav_H
-    harr_wav_HL = np.transpose(harr_wav_H) * harr_wav_L
-    harr_wav_HH = np.transpose(harr_wav_H) * harr_wav_H
-
-    filter_LL = torch.from_numpy(harr_wav_LL).unsqueeze(0)
-    filter_LH = torch.from_numpy(harr_wav_LH).unsqueeze(0)
-    filter_HL = torch.from_numpy(harr_wav_HL).unsqueeze(0)
-    filter_HH = torch.from_numpy(harr_wav_HH).unsqueeze(0)
-
-    if pool:
-        net = nn.Conv2d
-    else:
-        net = nn.ConvTranspose2d
-    LL = net(in_channels, in_channels*2,
-             kernel_size=2, stride=2, padding=0, bias=False,
-             groups=in_channels)
-    LH = net(in_channels, in_channels*2,
-             kernel_size=2, stride=2, padding=0, bias=False,
-             groups=in_channels)
-    HL = net(in_channels, in_channels*2,
-             kernel_size=2, stride=2, padding=0, bias=False,
-             groups=in_channels)
-    HH = net(in_channels, in_channels*2,
-             kernel_size=2, stride=2, padding=0, bias=False,
-             groups=in_channels)
-
-    LL.weight.requires_grad = False
-    LH.weight.requires_grad = False
-    HL.weight.requires_grad = False
-    HH.weight.requires_grad = False
-
-    LL.weight.data = filter_LL.float().unsqueeze(0).expand(in_channels*2, -1, -1, -1)
-    LH.weight.data = filter_LH.float().unsqueeze(0).expand(in_channels*2, -1, -1, -1)
-    HL.weight.data = filter_HL.float().unsqueeze(0).expand(in_channels*2, -1, -1, -1)
-    HH.weight.data = filter_HH.float().unsqueeze(0).expand(in_channels*2, -1, -1, -1)
-
-    return LL, LH, HL, HH
-
-class WavePool(nn.Module):
-    def __init__(self, in_channels):
-        super(WavePool, self).__init__()
-        self.LL, self.LH, self.HL, self.HH = get_wav(in_channels)
-
-    def forward(self, x):
-        return self.LL(x), self.LH(x), self.HL(x), self.HH(x)
 
 def get_wav_two(in_channels, pool=True):
     """wavelet decomposition using conv2d"""
@@ -79,7 +27,6 @@ def get_wav_two(in_channels, pool=True):
     harr_wav_HH = np.transpose(harr_wav_H) * harr_wav_H
 
     filter_LL = torch.from_numpy(harr_wav_LL).unsqueeze(0)
-   #  print(filter_LL.size())
     filter_LH = torch.from_numpy(harr_wav_LH).unsqueeze(0)
     filter_HL = torch.from_numpy(harr_wav_HL).unsqueeze(0)
     filter_HH = torch.from_numpy(harr_wav_HH).unsqueeze(0)
@@ -121,27 +68,70 @@ class WavePool2(nn.Module):
     def forward(self, x):
         return self.LL(x), self.LH(x), self.HL(x), self.HH(x)
 
-class WaveUnpool(nn.Module):
-    def __init__(self, in_channels, option_unpool='cat5'):
-        super(WaveUnpool, self).__init__()
-        self.in_channels = in_channels
-        self.option_unpool = option_unpool
-        self.LL, self.LH, self.HL, self.HH = get_wav_two(self.in_channels, pool=False)
 
-    def forward(self, LL, LH, HL, HH, original=None):
-        if self.option_unpool == 'sum':
-            return self.LL(LL) + self.LH(LH) + self.HL(HL) + self.HH(HH)
-        elif self.option_unpool == 'cat5' and original is not None:
-            return torch.cat([self.LL(LL), self.LH(LH), self.HL(HL), self.HH(HH), original], dim=1)
-        elif self.option_unpool =='sumall':
-            return LL + LH + HL + HH
-        else:
-            raise NotImplementedError
+class GaussPool(nn.Module):
+    def __init__(self, kernel_size, sigma, channels) -> None:
+        super(GaussPool, self).__init__()
+        self.ksize = kernel_size
+        self.sigma = sigma
+        self.channels = channels
+        self.gaussian = self.get_gaussian_kernel()
+    
+    def forward(self, x):
+        g = self.gaussian(x)
+        return g, g-x
 
-class LoFGAN(nn.Module):
+    def get_gaussian_kernel(self):
+        # Create a x, y coordinate grid of shape (kernel_size, kernel_size, 2)
+        x_coord = torch.arange(self.ksize)
+        x_grid = x_coord.repeat(self.ksize).view(self.ksize, self.ksize)
+        y_grid = x_grid.t()
+        xy_grid = torch.stack([x_grid, y_grid], dim=-1).float()
+
+        mean = (self.ksize - 1) / 2.0
+        variance = self.sigma ** 2.0
+
+        # Calculate the 2-dimensional gaussian kernel which is
+        # the product of two gaussian distributions for two different variables (in this case called x and y)
+        gaussian_kernel = (1.0 / (2.0 * math.pi * variance)) * torch.exp(-torch.sum((xy_grid - mean)**2., dim=-1) / (2*variance))
+
+        # Make sure sum of values in gaussian kernel equals 1.
+        gaussian_kernel /= torch.sum(gaussian_kernel)
+
+        # Reshape to 2d depthwise convolutional weight
+        gaussian_kernel = gaussian_kernel.view(1, 1, self.ksize, self.ksize)
+        gaussian_kernel = gaussian_kernel.repeat(self.channels, 1, 1, 1)
+
+        gaussian_filter = nn.Conv2d(in_channels=self.channels, out_channels=self.channels, kernel_size=self.ksize, groups=self.channels, bias=False, stride=1, padding=self.ksize//2)
+
+        gaussian_filter.weight.data = gaussian_kernel
+        gaussian_filter.weight.requires_grad = False
+        return gaussian_filter
+
+
+class DCTPool(nn.Module):
+    def __init__(self, ratio=2) -> None:
+        super(DCTPool, self).__init__()
+        assert isinstance(ratio, int)
+        self.ratio = ratio
+    
+    def forward(self, x, eps=1e-8):
+        assert len(x.shape) == 4
+        _, _, h, w = x.shape
+        h_, w_ = h//2, w//2
+        x_dct = dct.dct_2d(x)
+        x_dct_low = torch.zeros(x.shape).to(x.device)
+        x_dct_low[:, :, :h_, :w_] = x_dct[:, :, :h_, :w_]
+        x_dct_high = x_dct - x_dct_low
+        XL, XH = dct.idct_2d(x_dct_low), dct.idct_2d(x_dct_high)
+        amp_dct = torch.log(x_dct ** 2 + eps) # 防止log0出现
+        return amp_dct, XL, XH
+
+
+class DCTGAN(nn.Module):
     def __init__(self, config):
-        super(LoFGAN, self).__init__()
-
+        super(DCTGAN, self).__init__()
+        self.use_dct = True
         self.gen = Generator(config['gen'])
         self.dis = Discriminator(config['dis'])
 
@@ -151,71 +141,37 @@ class LoFGAN(nn.Module):
         self.w_cls = config['w_cls']
         self.w_gp = config['w_gp']
         self.n_sample = config['n_sample_train']
-        self.Pool = WavePool2(3).cuda()
+        self.Pool = DCTPool().cuda()
+        self.WPool = WavePool2(3).cuda()
         self.L1_loss = torch.nn.L1Loss()
 
 
     def forward(self, xs, y, mode):
         if mode == 'gen_update':
-            
             # visualize the frequency component of fake and real images
             # fake_dir = "./vggface_Frequency"
-            fake_x, similarity, indices_feat, indices_ref, base_index = self.gen(xs)
-            xs_index = xs[:,base_index,:,:,:]
+            # fake_x, similarity, indices_feat, indices_ref, base_index = self.gen(xs)
+            # xs_index = xs[:,base_index,:,:,:]
             # for i in range(8):
             #     img = xs_index[i,:,:,:]
             #     os.makedirs(fake_dir, exist_ok=True)
             #     output = unloader(img.cpu())
             #     if os.path.exists(fake_dir):
             #         output.save(os.path.join(fake_dir, 'xs_{}_Frequency.png'.format(i)), 'png')
-            #         #print("save successfully")
-            LL_real, LH_real, HL_real ,HH_real = self.Pool(xs_index)
-            LL_fake, LH_fake, HL_fake ,HH_fake = self.Pool(fake_x)
-            # for i in range(8):
-            #     img = LL_real[i,:,:,:]
-            #     os.makedirs(fake_dir, exist_ok=True)
-            #     output = unloader(img.cpu())
-            #     if os.path.exists(fake_dir):
-            #         output.save(os.path.join(fake_dir, 'LL_{}_Frequency.png'.format(i)), 'png')
-            #         #print("save successfully")
-            # for i in range(8):
-            #     img = LH_real[i,:,:,:]
-            #     os.makedirs(fake_dir, exist_ok=True)
-            #     output = unloader(img.cpu())
-            #     if os.path.exists(fake_dir):
-            #         output.save(os.path.join(fake_dir, 'LH_{}_Frequency.png'.format(i)), 'png')
-            #        # print("save successfully")
-            # for i in range(8):
-            #     img = HL_real[i,:,:,:]
-            #     os.makedirs(fake_dir, exist_ok=True)
-            #     output = unloader(img.cpu())
-            #     if os.path.exists(fake_dir):
-            #         output.save(os.path.join(fake_dir, 'HL_{}_Frequency.png'.format(i)), 'png')
-            #        # print("save successfully")
-            # for i in range(8):
-            #     img = HH_real[i,:,:,:]
-            #     os.makedirs(fake_dir, exist_ok=True)
-            #     output = unloader(img.cpu())
-            #     if os.path.exists(fake_dir):
-            #         output.save(os.path.join(fake_dir, 'HH_{}_Frequency.png'.format(i)), 'png')
-            #        # print("save successfully")
-            # for i in range(8):
-            #     img = HH_real[i,:,:,:] + LL_real[i,:,:,:] + LH_real[i,:,:,:] + HL_real[i,:,:,:]
-            #     os.makedirs(fake_dir, exist_ok=True)
-            #     output = unloader(img.cpu())
-            #     if os.path.exists(fake_dir):
-            #         output.save(os.path.join(fake_dir, 'AddingALL_{}_Frequency.png'.format(i)), 'png')
-            #        # print("save successfully")
-            # for i in range(8):
-            #     img = HH_real[i,:,:,:]  + LH_real[i,:,:,:] + HL_real[i,:,:,:]
-            #     os.makedirs(fake_dir, exist_ok=True)
-            #     output = unloader(img.cpu())
-            #     if os.path.exists(fake_dir):
-            #         output.save(os.path.join(fake_dir, 'Adding_HF_{}_Frequency.png'.format(i)), 'png')
-            #       #  print("save successfully")
-
+            
+            fake_x, similarity, indices_feat, indices_ref, base_index = self.gen(xs)
+            xs_index = xs[:,base_index,:,:,:]
             loss_recon = local_recon_criterion(xs, fake_x, similarity, indices_feat, indices_ref, base_index, s=8)
-            L1_loss = self.L1_loss(LL_real, LL_fake) + self.L1_loss(LH_real, LH_fake) + self.L1_loss(HL_real, HL_fake) + self.L1_loss(HH_real, HH_fake)
+
+            if self.use_dct:
+                dct_real, _, _ = self.Pool(xs_index)
+                dct_fake, _, _ = self.Pool(fake_x)
+                L1_loss = self.L1_loss(dct_real, dct_fake)
+            else:
+                LL_real, LH_real, HL_real ,HH_real = self.WPool(xs_index)
+                LL_fake, LH_fake, HL_fake ,HH_fake = self.WPool(fake_x)
+                L1_loss = self.L1_loss(LL_real, LL_fake) + self.L1_loss(LH_real, LH_fake) + self.L1_loss(HL_real, HL_fake) + self.L1_loss(HH_real, HH_fake)
+
             feat_real, _, _ = self.dis(xs)
             feat_fake, logit_adv_fake, logit_c_fake = self.dis(fake_x)
             loss_adv_gen = torch.mean(-logit_adv_fake)
@@ -348,21 +304,41 @@ class Generator(nn.Module):
     def forward(self, xs):
         b, k, C, H, W = xs.size()
         xs = xs.view(-1, C, H, W)
-        # print("encoder")
+
         querys, skips = self.encoder(xs)
         c, h, w = querys.size()[-3:]
         querys = querys.view(b, k, c, h, w)
+
+        c1, s1 = skips['conv1_1'], skips['skip1']
+        c2, s2 = skips['conv2_1'], skips['skip2']
+        c3, s3 = skips['conv3_1'], skips['skip3']
+        c4, s4 = skips['conv4_1'], skips['skip4']
+        
+        cg = make_grid(torch.mean(c1, dim=1), normalize=True)
+        save_image(cg, "conv1.png")
+        sg = make_grid(torch.mean(s1, dim=1), normalize=True)
+        save_image(sg, "skip1.png")
+        cg = make_grid(torch.mean(c2, dim=1), normalize=True)
+        save_image(cg, "conv2.png")
+        sg = make_grid(torch.mean(s2, dim=1), normalize=True)
+        save_image(sg, "skip2.png")
+        cg = make_grid(torch.mean(c3, dim=1), normalize=True)
+        save_image(cg, "conv3.png")
+        sg = make_grid(torch.mean(s3, dim=1), normalize=True)
+        save_image(sg, "skip3.png")
+        cg = make_grid(torch.mean(c4, dim=1), normalize=True)
+        save_image(cg, "conv4.png")
+        sg = make_grid(torch.mean(s4, dim=1), normalize=True)
+        save_image(sg, "skip4.png")
 
         similarity_total = torch.cat([torch.rand(b, 1) for _ in range(k)], dim=1).cuda()  # b*k
         similarity_sum = torch.sum(similarity_total, dim=1, keepdim=True).expand(b, k)  # b*k
         similarity = similarity_total / similarity_sum  # b*k
 
         base_index = random.choice(range(k))
-
         base_feat = querys[:, base_index, :, :, :]
 
         feat_gen, indices_feat, indices_ref = self.fusion(base_feat, querys, base_index, similarity)
-       # feat_gen = querys.mean(dim=1)
         fake_x = self.decoder(feat_gen, skips, base_index)
 
         return fake_x, similarity, indices_feat, indices_ref, base_index
@@ -376,90 +352,72 @@ class Encoder(nn.Module):
                              norm='bn',
                              activation='lrelu',
                              pad_type='reflect')
-        self.pool1 = WavePool(32).cuda()
+        # self.gauss1 = GaussPool(kernel_size=3, sigma=0.5, channels=32).cuda()
+        self.dct1 = DCTPool().cuda()
+        self.pool1 = nn.MaxPool2d(2, 2)
         self.conv2 = Conv2dBlock(32, 64, 3, 2, 1,
                              norm='bn',
                              activation='lrelu',
                              pad_type='reflect')
-        self.pool2 = WavePool(64).cuda()
+        # self.gauss2 = GaussPool(kernel_size=3, sigma=0.5, channels=64).cuda()
+        self.dct2 = DCTPool().cuda()
+        self.pool2 = nn.MaxPool2d(2, 2)
         self.conv3 = Conv2dBlock(64, 128, 3, 2, 1,
                              norm='bn',
                              activation='lrelu',
                              pad_type='reflect')
-        self.pool3 = WavePool2(128).cuda()
+        # self.gauss3 = GaussPool(kernel_size=3, sigma=0.5, channels=128).cuda()
+        self.dct3 = DCTPool().cuda()
+        self.pool3 = nn.MaxPool2d(2, 2)
         self.conv4 = Conv2dBlock(128, 128, 3, 2, 1,
                              norm='bn',
                              activation='lrelu',
                              pad_type='reflect')
-        self.pool4 = WavePool2(128).cuda()
+        # self.gauss4 = GaussPool(kernel_size=3, sigma=0.5, channels=128).cuda()
+        self.dct4 = DCTPool().cuda()
+        self.pool4 = nn.MaxPool2d(2, 2)
         self.conv5 = Conv2dBlock(128, 128, 3, 2, 1,
                              norm='bn',
                              activation='lrelu',
                              pad_type='reflect')
 
-#         model = [Conv2dBlock(3, 32, 5, 1, 2,
-#                              norm='bn',
-#                              activation='lrelu',
-#                              pad_type='reflect'),
-#                  WavePool(128),
-#                  Conv2dBlock(32, 64, 3, 2, 1,
-#                              norm='bn',
-#                              activation='lrelu',
-#                              pad_type='reflect'),
-#                  WavePool(64),
-#                  Conv2dBlock(64, 128, 3, 2, 1,
-#                              norm='bn',
-#                              activation='lrelu',
-#                              pad_type='reflect'),
-#                  WavePool(32),
-#                  Conv2dBlock(128, 128, 3, 2, 1,
-#                              norm='bn',
-#                              activation='lrelu',
-#                              pad_type='reflect'),
-#                  WavePool(16),
-# #                 WavePool(128),
-#                  Conv2dBlock(128, 128, 3, 2, 1,
-#                              norm='bn',
-#                              activation='lrelu',
-#                              pad_type='reflect')
-#                  ]
-        # self.model = nn.Sequential(*model)
-        # self.pool1 = WavePool(128)
-
     def forward(self, x):
-        #(24,3,128,128)
+        # (24,3,128,128)
         skips = {}
         x = self.conv1(x)
-        #(24,32,128,128)
+        # (24,32,128,128)
         skips['conv1_1'] = x
-        LL1, LH1, HL1, HH1 = self.pool1(x)
-        # (24,64,64,64)
-        skips['pool1'] = [LH1, HL1, HH1]
+        _, l1, h1 = self.dct1(x)
+        # x = self.pool1(x + g1)
+        x = (x + l1) * 0.5
+        # (24,32,128,128)
+        skips['skip1'] = h1
         x = self.conv2(x)
-        #(24,64,64,64)`
-        # p2 = self.pool2(x)
-        #（24,128,32,32）
+        #（24,128,64,64）
         skips['conv2_1'] = x
-        LL2, LH2, HL2, HH2 = self.pool2(x)
-        #（24,128,32,32）
-        skips['pool2'] = [LH2, HL2, HH2]
-
-        x = self.conv3(x+LL1)
-        #(24,128,32,32)
-        # p3 = self.pool3(x)
+        _, l2, h2 = self.dct2(x)
+        # x = self.pool2(x + g2)
+        x = (x + l2) * 0.5
+        #（24,128,64,64）
+        skips['skip2'] = h2
+        x = self.conv3(x)
+        # (24,128,32,32)
         skips['conv3_1'] = x
-        LL3, LH3, HL3, HH3 = self.pool3(x)
-        #(24,128,16,16)
-        skips['pool3'] = [LH3, HL3, HH3]
-        #(24,128,32,32)
-        x = self.conv4(x+LL2)
-        #(24,128,16,16)
+        _, l3, h3 = self.dct3(x)
+        # x = self.pool3(x + g3)
+        x = (x + l3) * 0.5
+        # (24,128,32,32)
+        skips['skip3'] = h3
+        x = self.conv4(x)
+        # (24,128,16,16)
         skips['conv4_1'] = x
-        LL4, LH4, HL4, HH4 = self.pool4(x)
-        skips['pool4'] = [LH4, HL4, HH4]
-        #(24,128,8,8)
-        x = self.conv5(x+LL3)
-        #(24,128,8,8)
+        _, l4, h4 = self.dct4(x)
+        # x = self.pool4(x + g4)
+        x = (x + l4) * 0.5
+        # (24,128,16,16)
+        skips['skip4'] = h4
+        x = self.conv5(x)
+        # (24,128,8,8)
         return x, skips
 
 
@@ -472,114 +430,78 @@ class Decoder(nn.Module):
                              norm='bn',
                              activation='lrelu',
                              pad_type='reflect')
-        self.recon_block1 = WaveUnpool(128,"sum").cuda()
+        # self.recon_block1 = nn.Upsample(scale_factor=2).cuda()
         self.Conv2 = Conv2dBlock(128, 128, 3, 1, 1,
                              norm='bn',
                              activation='lrelu',
                              pad_type='reflect')
-        self.recon_block2 = WaveUnpool(128, "sum").cuda()
+        # self.recon_block2 = nn.Upsample(scale_factor=2).cuda()
         self.Conv3 = Conv2dBlock(128, 64, 3, 1, 1,
                              norm='bn',
                              activation='lrelu',
                              pad_type='reflect')
-        self.recon_block3 = WaveUnpool(64, "sumall").cuda()
+        # self.recon_block3 = nn.Upsample(scale_factor=2).cuda()
         self.Conv4 = Conv2dBlock(64, 32, 3, 1, 1,
                              norm='bn',
                              activation='lrelu',
                              pad_type='reflect')
-        self.recon_block4 = WaveUnpool(32, "sum").cuda()
+        # self.recon_block4 = nn.Upsample(scale_factor=2).cuda()
         self.Conv5 = Conv2dBlock(32, 3, 5, 1, 2,
                              norm='none',
                              activation='tanh',
                              pad_type='reflect')
-#        self.Unpool
 
-        # model = [nn.Upsample(scale_factor=2),
-        #          Conv2dBlock(128, 128, 3, 1, 1,
-        #                      norm='bn',
-        #                      activation='lrelu',
-        #                      pad_type='reflect'),
-        #          nn.Upsample(scale_factor=2),
-        #          Conv2dBlock(128, 128, 3, 1, 1,
-        #                      norm='bn',
-        #                      activation='lrelu',
-        #                      pad_type='reflect'),
-        #          nn.Upsample(scale_factor=2),
-        #          Conv2dBlock(128, 64, 3, 1, 1,
-        #                      norm='bn',
-        #                      activation='lrelu',
-        #                      pad_type='reflect'),
-        #          nn.Upsample(scale_factor=2),
-        #          Conv2dBlock(64, 32, 3, 1, 1,
-        #                      norm='bn',
-        #                      activation='lrelu',
-        #                      pad_type='reflect'),
-        #          Conv2dBlock(32, 3, 5, 1, 2,
-        #                      norm='none',
-        #                      activation='tanh',
-        #                      pad_type='reflect')]
-        # self.model = nn.Sequential(*model)
-
-    def forward(self, x, skips,base_index):
+    def forward(self, x, skips, base_index):
         x1 = self.Upsample(x)
         x2 = self.Conv1(x1)
-        LH1, HL1, HH1 = skips['pool4']
-        c, h, w = LH1.size()[-3:]
-        # Mean_index
-        # LH1, HL1, HH1 = LH1.view(8,3,c, h, w).mean(dim=1), HL1.view(8,3,c, h, w).mean(dim=1), HH1.view(8,3,c, h, w).mean(dim=1)
+        d1 = skips['skip4']
+        c, h, w = d1.size()[-3:]
+        
         # Base_index
-        LH1, HL1, HH1 = LH1.view(8, 3,c, h, w), HL1.view(8, 3,c, h, w), HH1.view(8, 3,c, h, w)
-        LH1, HL1, HH1 = LH1[:,base_index,:,:,:], HL1[:,base_index,:,:,:], HH1[:,base_index,:,:,:]
+        if self.training:
+            d1 = d1.view(8, 3, c, h, w)
+            d1 = d1[:,base_index,:,:,:]
         original1 = skips['conv4_1']
-        x_deconv = self.recon_block1(x, LH1, HL1, HH1, original1)
-        x2 = x_deconv + x2
+        x_deconv1 = (x2 + d1) * 0.5
 
-        x3 = self.Upsample(x2)
+        x3 = self.Upsample(x_deconv1)
         x4 = self.Conv2(x3)
-        LH2, HL2, HH2 = skips['pool3']
+        d2 = skips['skip3']
         original2 = skips['conv3_1']
-        c, h, w = LH2.size()[-3:]
-        #Mean_index
-        #LH2, HL2, HH2 = LH2.view(8, 3, c, h, w).mean(dim=1), HL2.view(8, 3, c, h, w).mean(dim=1), HH2.view(8, 3, c, h,w).mean(dim=1)
+        c, h, w = d2.size()[-3:]
+        
         # Base_index
-        LH2, HL2, HH2 = LH2.view(8, 3, c, h, w), HL2.view(8, 3, c, h, w), HH2.view(8, 3, c, h, w)
-        LH2, HL2, HH2 = LH2[:, base_index, :, :, :], HL2[:, base_index, :, :, :], HH2[:, base_index, :, :, :]
-        x_deconv2 = self.recon_block1(x1, LH2, HL2, HH2, original2)
+        if self.training:
+            d2 = d2.view(8, 3, c, h, w)
+            d2 = d2[:, base_index, :, :, :]
+        x_deconv2 = (x4 + d2) * 0.5
 
-        LH3, HL3, HH3 = skips['pool2']
-        c, h, w = skips['conv2_1'].size()[-3:]
+        x5 = self.Upsample(x_deconv2)
+        x6 = self.Conv3(x5)
+        d3 = skips['skip2']
         original3 = skips['conv2_1']
-        c, h, w = LH3.size()[-3:]
-        #Mean_index
-        #LH3, HL3, HH3 = LH3.view(8, 3, c, h, w).mean(dim=1), HL3.view(8, 3, c, h, w).mean(dim=1), HH3.view(8, 3, c, h,w).mean(dim=1)
+        c, h, w = d3.size()[-3:]
+        
         # Base_index
-        LH3, HL3, HH3 = LH3.view(8, 3, c, h, w), HL3.view(8, 3, c, h, w), HH3.view(8, 3, c, h, w)
-        LH3, HL3, HH3 = LH3[:, base_index, :, :, :], HL3[:, base_index, :, :, :], HH3[:, base_index, :, :, :]
-        x_deconv3 = self.recon_block1(x3, LH3, HL3, HH3, original2)
-        x5 = self.Upsample(x4+x_deconv2)
-        #x5 = self.Upsample(x4)
-        x6 = self.Conv3(x5+x_deconv3)
-        #x6 = self.Conv3(x5)
-        LH4, HL4, HH4 = skips['pool1']
-        original4 = skips['conv1_1']
-        c, h, w = LH4.size()[-3:]
-        # Mean_index
-        #LH4, HL4, HH4 = LH4.view(8, 3, c, h, w).mean(dim=1), HL4.view(8, 3, c, h, w).mean(dim=1), HH4.view(8, 3, c, h,w).mean(dim=1)
-        # Base_index
-        LH4, HL4, HH4 = LH4.view(8, 3, c, h, w), HL4.view(8, 3, c, h, w), HH4.view(8, 3, c, h, w)
-        LH4, HL4, HH4 = LH4[:, base_index, :, :, :], HL4[:, base_index, :, :, :], HH4[:, base_index, :, :, :]
-        x_deconv4 = self.recon_block3(x6, LH4, HL4, HH4, original3)
-
-
-        x7 = self.Upsample(x6+x_deconv4)
-        #x7 = self.Upsample(x6)
+        if self.training:
+            d3 = d3.view(8, 3, c, h, w)
+            d3 = d3[:, base_index, :, :, :]
+        x_deconv3 = (x6 + d3) * 0.5
+        
+        x7 = self.Upsample(x_deconv3)
         x8 = self.Conv4(x7)
+        d4 = skips['skip1']
+        original4 = skips['conv1_1']
+        c, h, w = d4.size()[-3:]
+        
+        # Base_index
+        if self.training:
+            d4 = d4.view(8, 3, c, h, w)
+            d4 = d4[:, base_index, :, :, :]
+        x_deconv4 = (x8 + d4) * 0.5
 
-
-        x9 = self.Conv5(x8)
-
+        x9 = self.Conv5(x_deconv4)
         return x9
-
 
 
 class LocalFusionModule(nn.Module):
@@ -651,5 +573,3 @@ class LocalFusionModule(nn.Module):
         feat = feat.view(b, c, h, w)  # (32*128*8*8)
 
         return feat, feat_indices, ref_indices  # (32*128*8*8), (32*12), (32*2*12)
-
-

@@ -55,17 +55,16 @@ def LPIPS(root):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--cfg', type=str, default="")
-parser.add_argument('--name', type=str, default="")
-parser.add_argument('--dataset', type=str, default="")
-parser.add_argument('--real_dir', type=str, default="")
-parser.add_argument('--fake_dir', type=str,default="")
+parser.add_argument('--name', type=str,default="results/flower_wavegan_base_index")
+parser.add_argument('--dataset', type=str, default="flower")
+parser.add_argument('--real_dir', type=str, default="results/flower_wavegan_base_index/reals")
+parser.add_argument('--fake_dir', type=str,default="results/flower_wavegan_base_index/tests")
 parser.add_argument('--ckpt', type=str, default="gen_00100000.pt")
 parser.add_argument('--gpu', type=str, default='0')
 parser.add_argument('--n_sample_test', type=int, default=3)
 args = parser.parse_args()
 
-conf_file = os.path.join(args.name, args.cfg)
+conf_file = os.path.join(args.name, 'configs.yaml')
 config = get_config(conf_file)
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 
@@ -82,10 +81,9 @@ if __name__ == '__main__':
     torch.cuda.manual_seed(SEED)
 
     real_dir = args.real_dir
-    fake_dir = args.fake_dir  # os.path.join(args.name, args.fake_dir)
+    fake_dir = os.path.join(args.name, args.fake_dir)
     print('real dir: ', real_dir)
     print('fake dir: ', fake_dir)
-    print(torch.cuda.is_available())
 
     if os.path.exists(fake_dir):
         shutil.rmtree(fake_dir)
