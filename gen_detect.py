@@ -11,6 +11,7 @@ from sklearn.cluster import DBSCAN, KMeans
 from skimage.feature import local_binary_pattern
 from sklearn.metrics import silhouette_score, silhouette_samples
 from pprint import pprint
+class_list = ['2S1', 'BRDM_2', 'BTR_60', 'D7', 'SN_132', 'SN_9563', 'SN_C71', 'T62', 'ZIL131', 'ZSU_23_4']
 
 
 def cxcy2xyxy(bbox: list, shape: tuple):
@@ -79,50 +80,53 @@ def inpaint_hist(img, mask, window_size):
 
 
 def gen_yolo(img_folder, out_folder, class_index: list):
-    if not os.path.exists(out_folder):
-        os.makedirs(out_folder + "origin/")
-        os.makedirs(out_folder + "visual/")
-        os.makedirs(out_folder + "labels/")
-    for fname in os.listdir(img_folder):
-        img = cv2.imread(img_folder + fname)
-        img = img[14:114, 14:114, :]
-        img_origin = img.copy()
-        img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        t, img_otsu = cv2.threshold(img_gray, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
-        print("threshold:{}".format(t))
-        num_obj, labels = cv2.connectedComponents(img_otsu)
-        print("num objects:{}".format(num_obj))
+    # if not os.path.exists(out_folder):
+    os.makedirs(out_folder + "origin/", exist_ok=True)
+    os.makedirs(out_folder + "visual/", exist_ok=True)
+    os.makedirs(out_folder + "labels/", exist_ok=True)
+    for cls in class_index:
+        cls_folder = img_folder + str(cls)
+        for fname in os.listdir(cls_folder):
+            img = cv2.imread(os.path.join(cls_folder, fname))
+            # img = img[14:114, 14:114, :]
+            img_origin = img.copy()
+            img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            t, img_otsu = cv2.threshold(img_gray, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+            print("threshold:{}".format(t))
+            num_obj, labels = cv2.connectedComponents(img_otsu)
+            print("num objects:{}".format(num_obj))
 
-        kernel = np.ones((3, 3))
-        img_close = cv2.morphologyEx(img_otsu, cv2.MORPH_CLOSE, kernel)
-        num_obj_, labels_ = cv2.connectedComponents(img_close)
-        print("num objects:{}".format(num_obj_))
-        while num_obj_ < num_obj:
-            num_obj = num_obj_
-            img_close = cv2.morphologyEx(img_close, cv2.MORPH_CLOSE, kernel)
+            kernel = np.ones((3, 3))
+            img_close = cv2.morphologyEx(img_otsu, cv2.MORPH_CLOSE, kernel)
             num_obj_, labels_ = cv2.connectedComponents(img_close)
             print("num objects:{}".format(num_obj_))
+            while num_obj_ < num_obj:
+                num_obj = num_obj_
+                img_close = cv2.morphologyEx(img_close, cv2.MORPH_CLOSE, kernel)
+                num_obj_, labels_ = cv2.connectedComponents(img_close)
+                print("num objects:{}".format(num_obj_))
 
-        obj_counts = [(labels_ == n).sum() for n in range(1, num_obj_)]
-        obj_idx = obj_counts.index(max(obj_counts)) + 1
-        ty, tx = np.nonzero(labels_ == obj_idx)
-        ltx, lty = tx.min(), ty.min()  # left top
-        rbx, rby = tx.max(), ty.max()  # right bottom
+            obj_counts = [(labels_ == n).sum() for n in range(1, num_obj_)]
+            obj_idx = obj_counts.index(max(obj_counts)) + 1
+            ty, tx = np.nonzero(labels_ == obj_idx)
+            ltx, lty = tx.min(), ty.min()  # left top
+            rbx, rby = tx.max(), ty.max()  # right bottom
 
-        w, h = img_gray.shape
-        box_w, box_h = rbx-ltx, rby-lty
-        cx, cy = 0.5 * (ltx + rbx), 0.5 * (lty + rby)
-        bbox_yolo = cx/w, cy/h, box_w/w, box_h/h
+            w, h = img_gray.shape
+            box_w, box_h = rbx-ltx, rby-lty
+            cx, cy = 0.5 * (ltx + rbx), 0.5 * (lty + rby)
+            bbox_yolo = cx/w, cy/h, box_w/w, box_h/h
 
-        # 当目标长和宽小于图像大小的一半时，输出图像（先验）
-        if 0.15 < bbox_yolo[2] < 0.5 and 0.15 < bbox_yolo[3] < 0.5:
-            clb = class_index[int(fname[0])]
-            data_list = list((clb,) + bbox_yolo)
-            with open(out_folder + "labels/" + str(clb) + fname[1:-4] + ".txt", 'w') as f:
-                f.write(' '.join(list(map(str, data_list))))
-            cv2.rectangle(img, (ltx, lty), (rbx, rby), (0, 0, 255))
-            cv2.imwrite(out_folder + "origin/" + str(clb) + fname[1:], img_origin)
-            cv2.imwrite(out_folder + "visual/" + str(clb) + fname[1:-4] + "_out" + fname[-4:], img)
+            # 当目标长和宽小于图像大小的一半时，输出图像（先验）
+            if 0.15 < bbox_yolo[2] < 0.5 and 0.15 < bbox_yolo[3] < 0.5:
+                # clb = class_index[int(fname[0])]
+                clb = cls
+                data_list = list((clb,) + bbox_yolo)
+                with open(out_folder + "labels/" + str(clb) + fname[:-4] + ".txt", 'w') as f:
+                    f.write(' '.join(list(map(str, data_list))))
+                cv2.rectangle(img, (ltx, lty), (rbx, rby), (0, 0, 255))
+                cv2.imwrite(out_folder + "origin/" + str(clb) + fname[:], img_origin)
+                cv2.imwrite(out_folder + "visual/" + str(clb) + fname[:-4] + "_out" + fname[-4:], img)
             
 
 def gen_background(base_folder, out_folder, inpaint_radius, method: str):
@@ -273,9 +277,9 @@ def gen_multi(base_folder, img_size = (100, 100, 3), gen_size = (2, 2), gen_num 
 
 
 def main():
-    class_list = ['2S1', 'BRDM_2', 'BTR_60', 'D7', 'SN_132', 'SN_9563', 'SN_C71', 'T62', 'ZIL131', 'ZSU_23_4']
     class_index_list4 = [6, 2, 5, 4]
     class_index_list6 = [3, 1, 8, 9, 0, 7]
+    class_index_list = class_index_list4 + class_index_list6
     img_path4 = "results/fake/4/"
     img_path6 = "results/fake/6/"
     
@@ -295,8 +299,10 @@ def main():
 
     # gen_yolo(img_path4, out_path, class_index_list4)
     # gen_yolo(img_path6, out_path, class_index_list6)
-    # gen_background(out_path, out_path + "fake_background/", inpaint_radius=3, method='hist')
-    gen_clusters(out_path, "/data/cyf/MYGAN/out/background", "results/noise", cluster_model=models["DBSCAN"], model_name="DBSCAN")
+    
+    gen_yolo("results/fake/Mstar/", out_path, class_index_list)
+    gen_background(out_path, out_path + "fake_background/", inpaint_radius=3, method='hist')
+    gen_clusters(out_path, out_path + "fake_background/", None, cluster_model=models["DBSCAN"], model_name="DBSCAN") # "results/noise"
     gen_multi(out_path)
 
 if __name__ == "__main__":

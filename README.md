@@ -67,7 +67,7 @@ Run `bash scripts/test.sh` or
 ```sh
 python test.py \
 --dir Mstar \
---conf configs/mstar_dctgan.yaml \
+--conf configs.yaml \
 --name results/mstar_dctgan \
 --gpu 0
 ```

@@ -136,10 +136,14 @@ if __name__ == '__main__':
     #         write_image(it, out_dir, imgs, fake_xs, format='png')
 
     num = 0
-    if args.name.endswith('Mstar'):
-        num = 11 # 10+1
-    if args.name.endswith('SADD'):
+    if 'mstar' in args.name:
+        num = 11
+    if 'sadd' in args.name:
         num = 1
+    # if args.name.endswith('Mstar'):
+    #     num = 11 # 10+1
+    # if args.name.endswith('SADD'):
+    #     num = 1
     data = np.load(config['data_root'])
     data_for_gen = data[:num, :, :, :, :]
     data_for_fid = data[num:, :, :, :, :]
